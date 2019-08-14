@@ -5,9 +5,9 @@ process content files and create suitably formatted title tags
 import argparse
 import os
 from enum import Enum
-from bs4 import BeautifulSoup, Tag, NavigableString
+from bs4 import BeautifulSoup, Tag
 import roman
-from se.formatting import titlecase, format_xhtml, semanticate
+from se.formatting import titlecase, format_xhtml
 
 
 class BookDivision(Enum):
