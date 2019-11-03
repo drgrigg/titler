@@ -224,7 +224,7 @@ def process_file(filepath: str, rename: bool) -> (str, str):
 	filepath: path to content file
 
 	OUTPUTS:
-	altered xhtml file text
+	altered xhtml file text and new section ID (as a tuple)
 	"""
 	xhtml = gethtml(filepath)
 	soup = BeautifulSoup(xhtml, "html.parser")
@@ -243,7 +243,7 @@ def process_file(filepath: str, rename: bool) -> (str, str):
 			title_tag.clear()
 			title_tag.append(title_info.output_title())
 			return format_xhtml(str(soup)), new_id
-	return ""
+	return "", ""
 
 
 def get_book_division(tag: BeautifulSoup) -> BookDivision:
@@ -299,7 +299,7 @@ def main():
 		if file_name in EXCLUDE_LIST:  # ignore it
 			continue
 		result = process_file(os.path.join(textpath, file_name), args.rename)
-		if result != "":
+		if result[0] != "":
 			out_xhtml = result[0]
 			processed += 1
 			if args.in_place:
