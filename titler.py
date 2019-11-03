@@ -4,10 +4,13 @@ process content files and create suitably formatted title tags
 """
 import argparse
 import os
+import unicodedata
 from enum import Enum
 from bs4 import BeautifulSoup, Tag
 import roman
-from se.formatting import titlecase, format_xhtml
+import regex
+from se.formatting import titlecase
+from se.formatting import format_xhtml
 
 
 class BookDivision(Enum):
@@ -68,6 +71,47 @@ class TitleInfo:
 					return self.cleaned_title
 			else:
 				return self.cleaned_title
+
+	def output_safe_id(self):
+		return make_url_safe(self.cleaned_title + ": " + self.subtitle)
+
+
+def make_url_safe(text: str) -> str:
+	"""
+	Return a URL-safe version of the input. For example, the string "Mother's Day" becomes "mothers-day".
+
+	INPUTS
+	text: A string to make URL-safe
+
+	OUTPUTS
+	A URL-safe version of the input string
+	"""
+
+	# 1. Convert accented characters to unaccented characters
+	text = regex.sub(r"\p{M}", "", unicodedata.normalize("NFKD", text))
+
+	# 2. Trim
+	text = text.strip()
+
+	# 3. Convert title to lowercase
+	text = text.lower()
+
+	# 4. Remove apostrophes
+	text = regex.sub(r"['‘’]", "", text)
+
+	# 4a. Remove double quotes
+	text = regex.sub(r'["”“]', '', text)
+
+	# 5. Convert any non-digit, non-letter character to a space
+	text = regex.sub(r"[^0-9a-z]", " ", text, flags=regex.IGNORECASE)
+
+	# 6. Convert any instance of one or more space to a dash
+	text = regex.sub(r"\s+", "-", text)
+
+	# 7. Remove trailing dashes
+	text = regex.sub(r"\-+$", "", text)
+
+	return text
 
 
 def get_content_files(opf: BeautifulSoup) -> list:
@@ -172,22 +216,33 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 		return title_info
 
 
-def process_file(filepath: str) -> str:
+def process_file(filepath: str, rename: bool) -> (str, str):
 	"""
 	Run through each file, locating titles and updating <title> tag.
-	:param filepath: path to content file
-	:return: altered xhtml file text
+
+	INPUTS:
+	filepath: path to content file
+
+	OUTPUTS:
+	altered xhtml file text
 	"""
 	xhtml = gethtml(filepath)
 	soup = BeautifulSoup(xhtml, "html.parser")
 	heading = soup.find(["h2", "h3", "h4", "h5", "h6"])  # find first heading, not interested in h1 in halftitle
 	if heading:
+		section = heading.find_parent("section")
 		title_info = process_first_heading(heading)
 		title_tag = soup.find("title")
+		if rename:
+			new_id = title_info.output_safe_id()
+			if section:
+				section["id"] = new_id
+		else:
+			new_id = ""
 		if title_tag:
 			title_tag.clear()
 			title_tag.append(title_info.output_title())
-			return format_xhtml(str(soup))
+			return format_xhtml(str(soup)), new_id
 	return ""
 
 
@@ -218,12 +273,13 @@ def get_book_division(tag: BeautifulSoup) -> BookDivision:
 
 
 # don't process these files
-exclude_list = ["titlepage.xhtml", "colophon.xhtml", "uncopyright.xhtml", "imprint.xhtml", "halftitle.xhtml"]
+EXCLUDE_LIST = ["titlepage.xhtml", "colophon.xhtml", "uncopyright.xhtml", "imprint.xhtml", "halftitle.xhtml", "dedication.xhtml", "endnotes.xhtml", "loi.xhtml"]
 
 
 def main():
 	parser = argparse.ArgumentParser(description="Process titles and subtitles, set title case and update <title> tags.")
 	parser.add_argument("-i", "--in_place", action="store_true", help="overwrite the existing xhtml files instead of printing to stdout")
+	parser.add_argument("-r", "--rename", action="store_true", help="create xhtml files named for story titles")
 	parser.add_argument("directory", metavar="DIRECTORY", help="a Standard Ebooks source directory")
 	args = parser.parse_args()
 
@@ -240,14 +296,19 @@ def main():
 	file_list = get_content_files(soup)
 	processed = 0
 	for file_name in file_list:
-		if file_name in exclude_list:
+		if file_name in EXCLUDE_LIST:  # ignore it
 			continue
-		out_xhtml = process_file(os.path.join(textpath, file_name))
-		processed += 1
-		if args.in_place:
-			puthtml(out_xhtml, os.path.join(textpath, file_name))
-		else:
-			print(out_xhtml)
+		result = process_file(os.path.join(textpath, file_name), args.rename)
+		if result != "":
+			out_xhtml = result[0]
+			processed += 1
+			if args.in_place:
+				puthtml(out_xhtml, os.path.join(textpath, file_name))
+			elif args.rename:
+				renamed_fname = result[1] + ".xhtml"
+				puthtml(out_xhtml, os.path.join(textpath, renamed_fname))
+			else:
+				print(out_xhtml)
 	if processed == 0:
 		print("No files processed. Did you update manifest and order the spine?")
 
