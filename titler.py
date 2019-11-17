@@ -216,7 +216,7 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 		return title_info
 
 
-def process_file(filepath: str, rename: bool) -> (str, str):
+def process_file(filepath: str) -> (str, str):
 	"""
 	Run through each file, locating titles and updating <title> tag.
 
@@ -233,12 +233,9 @@ def process_file(filepath: str, rename: bool) -> (str, str):
 		section = heading.find_parent("section")
 		title_info = process_first_heading(heading)
 		title_tag = soup.find("title")
-		if rename:
-			new_id = title_info.output_safe_id()
-			if section:
-				section["id"] = new_id
-		else:
-			new_id = ""
+		new_id = title_info.output_safe_id()
+		if section:
+			section["id"] = new_id
 		if title_tag:
 			title_tag.clear()
 			title_tag.append(title_info.output_title())
@@ -298,13 +295,13 @@ def main():
 	for file_name in file_list:
 		if file_name in EXCLUDE_LIST:  # ignore it
 			continue
-		result = process_file(os.path.join(textpath, file_name), args.rename)
+		result = process_file(os.path.join(textpath, file_name))
 		if result[0] != "":
 			out_xhtml = result[0]
 			processed += 1
 			if args.in_place:
 				puthtml(out_xhtml, os.path.join(textpath, file_name))
-			elif args.rename:
+			elif args.rename and result[1] != "":
 				renamed_fname = result[1] + ".xhtml"
 				puthtml(out_xhtml, os.path.join(textpath, renamed_fname))
 			else:
