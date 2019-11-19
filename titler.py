@@ -37,7 +37,7 @@ class TitleInfo:
 	roman = ""
 	number = 0
 	depth = 1
-	part_prefix = ""
+	id_prefix = ""
 	division = BookDivision
 
 	def output_title(self) -> str:
@@ -86,14 +86,16 @@ class TitleInfo:
 		id_string = ""
 
 		if self.roman:  # simplest case, ignore any subtitle
-			id_string = prefix + "-" + self.part_prefix + str(self.number)
+			id_string = prefix + "-" + self.id_prefix + "-" + str(self.number)
 		else:
 			if self.cleaned_title:
-				id_string = self.cleaned_title
+				if self.id_prefix:
+					id_string = self.id_prefix + "-" + self.cleaned_title
+				else:
+					id_string = self.cleaned_title
 			else:  # unlikely case: subtitle but no title ??
 				if self.cleaned_subtitle:
 					id_string = self.cleaned_subtitle
-
 		return make_url_safe(id_string)
 
 
@@ -251,29 +253,41 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 		return title_info
 
 
-def get_part_prefix(sections: list) -> str:
+def get_part_prefix(title_info: TitleInfo, sections: list):
 	"""
 	Determine the numeric prefix if we're nested inside a part or volume
+	and any file-name prefix required for a rename operation.
+
 	INPUTS:
+	title_info: TitleInfo object to update
 	sections: sequence of outer section tags (BeautifulSoup tags)
 
 	OUTPUTS:
-	string holding prefix of the part, eg '3-2'
+	Updated TitleInfo objectstring holding prefix of the part, eg '3-2'
 	"""
+	title_info.depth = len(sections)
+	if title_info.depth <= 1:
+		return  # nothing to do
+
 	# first section (sections[0]) is the nearest to the content, don't want that.
 	# we want the next outer section
 	epub_type = sections[1].get("epub:type") or ""
 	if not epub_type:
-		return ""
+		return  # nothing to do
 	if "part" not in epub_type and "division" not in epub_type and "volume" not in epub_type:
-		return ""
+		return  # nothing to do
 	section_id = sections[1].get("id") or ""
-	if section_id:
+	if not section_id:
+		return  # nothing to do
+	# is it in a short-story collection? In this case, we want the full outer section id eg 'book-1'
+	inner_epub_type = sections[0].get("epub:type") or ""
+	if "short-story" in inner_epub_type:
+		title_info.id_prefix = section_id
+	else:  # just want the numeric bit eg '1'
+		title_info.file_prefix = section_id
 		match = regex.search(r"\w+[-](\d{1,}.*?)", section_id)
 		if match:
-			return match.group(1) + "-"
-	else:
-		return ""
+			title_info.id_prefix = match.group(1)
 
 
 def process_file(filepath: str) -> (str, str):
@@ -293,9 +307,7 @@ def process_file(filepath: str) -> (str, str):
 		title_info = process_first_heading(heading)
 		title_tag = soup.find("title")
 		sections = heading.find_parents("section")
-		title_info.depth = len(sections)
-		if title_info.depth > 1 and title_info.number > 0:
-			title_info.part_prefix = get_part_prefix(sections)
+		get_part_prefix(title_info, sections)
 		new_id = title_info.generate_id()
 		section = heading.find_parent("section")
 		if section:
@@ -303,7 +315,8 @@ def process_file(filepath: str) -> (str, str):
 		if title_tag:
 			title_tag.clear()
 			title_tag.append(title_info.output_title())
-			return format_xhtml(str(soup)), new_id
+		return format_xhtml(str(soup)), new_id
+	# failure, so return blanks
 	return "", ""
 
 
@@ -339,7 +352,7 @@ EXCLUDE_LIST = ["titlepage.xhtml", "colophon.xhtml", "uncopyright.xhtml", "impri
 
 def main():
 	parser = argparse.ArgumentParser(description="Process titles and subtitles, set title case and update <title> tags.")
-	parser.add_argument("-i", "--in_place", action="store_true", help="overwrite the existing xhtml files instead of printing to stdout")
+# 	parser.add_argument("-i", "--in_place", action="store_true", help="overwrite the existing xhtml files instead of printing to stdout")
 	parser.add_argument("-r", "--rename", action="store_true", help="create xhtml files named for story titles")
 	parser.add_argument("directory", metavar="DIRECTORY", help="a Standard Ebooks source directory")
 	args = parser.parse_args()
@@ -363,15 +376,19 @@ def main():
 		if result[0] != "":
 			out_xhtml = result[0]
 			processed += 1
-			if args.in_place:
-				puthtml(out_xhtml, os.path.join(textpath, file_name))
-			elif args.rename and result[1] != "":
-				renamed_fname = result[1] + ".xhtml"
-				puthtml(out_xhtml, os.path.join(textpath, renamed_fname))
+			# if args.in_place:
+			# 	puthtml(out_xhtml, os.path.join(textpath, file_name))
+			if args.rename:
+				if result[1] != "":
+					renamed_fname = result[1] + ".xhtml"
+					puthtml(out_xhtml, os.path.join(textpath, renamed_fname))
+				else:
+					print("This should throw an error: empty rename string")
 			else:
-				print(out_xhtml)
+				# print(out_xhtml)
+				puthtml(out_xhtml, os.path.join(textpath, file_name))
 	if processed == 0:
-		print("No files processed. Did you update manifest and order the spine?")
+		print("This should throw a warning: No files processed. Did you update manifest and order the spine?")
 
 
 if __name__ == "__main__":
