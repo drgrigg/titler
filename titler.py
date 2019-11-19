@@ -42,18 +42,7 @@ class TitleInfo:
 		"""
 		:return: a suitably formatted and constructed string for a title tag
 		"""
-		if self.division == BookDivision.ARTICLE:
-			prefix = ""
-		elif self.division == BookDivision.CHAPTER:
-			prefix = "Chapter"
-		elif self.division == BookDivision.DIVISION:
-			prefix = "Division"
-		elif self.division == BookDivision.PART:
-			prefix = "Part"
-		elif self.division == BookDivision.VOLUME:
-			prefix = "Volume"
-		else:
-			prefix = ""
+		prefix = self.generate_prefix()
 
 		if self.subtitle:
 			if prefix != "":
@@ -72,8 +61,38 @@ class TitleInfo:
 			else:
 				return self.cleaned_title
 
-	def output_safe_id(self):
-		return make_url_safe(self.cleaned_title + ": " + self.subtitle)
+	def generate_prefix(self):
+		if self.division == BookDivision.ARTICLE:
+			prefix = ""
+		elif self.division == BookDivision.CHAPTER:
+			prefix = "Chapter"
+		elif self.division == BookDivision.DIVISION:
+			prefix = "Division"
+		elif self.division == BookDivision.PART:
+			prefix = "Part"
+		elif self.division == BookDivision.VOLUME:
+			prefix = "Volume"
+		else:
+			prefix = ""
+		return prefix
+
+	def generate_id(self):
+		"""
+		:return: a suitably formatted and constructed string for a section id
+		"""
+		prefix = self.generate_prefix()
+		id_string = ""
+
+		if self.roman:  # simplest case, ignore any subtitle
+			id_string = prefix + "-" + str(self.number)
+		else:
+			if self.cleaned_title:
+				id_string = self.cleaned_title
+			else:  # unlikely case: subtitle but no title ??
+				if self.cleaned_subtitle:
+					id_string = self.cleaned_subtitle
+
+		return make_url_safe(id_string)
 
 
 def make_url_safe(text: str) -> str:
@@ -170,13 +189,42 @@ def extract_contents_as_string(tag: Tag) -> str:
 def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 	"""
 	Get title and subtitle text from heading
-	:param heading: a soup object representing a heading
-	:return: object containing title information
+	INPUTS: heading: a soup object representing a heading
+		We make some assumptions: should be either single line like:
+		<h2 epub:type="title z3998:roman">XIV</h2>
+		or multiline like
+			<h2 epub:type="title">
+				<span>A Title</span>
+				<span epub:type="subtitle">A Subtitle</span>
+			</h2>
+	OUTPUTS:  object containing title information
 	"""
 	title_info = TitleInfo()
 	title_info.division = get_book_division(heading)
 
-	spans = heading.find_all("span")
+	# first, check to see if we have a single-line title
+	line_count = str(heading).count("\n") + 1
+	if line_count == 1:
+		epub_type = heading.get("epub:type") or ""
+		if epub_type:
+			if "z3998:roman" in epub_type:
+				title_info.roman = titlecase(heading.get_text())
+				title_info.number = roman.fromRoman(title_info.roman)
+				# if we found a roman numeral in a one-level title, that's it
+				return title_info
+		# title isn't roman, so just get text ignoring any embedded spans
+		# this INCLUDES embedded spans as strings
+		title_info.title = titlecase(extract_contents_as_string(heading))
+		# this STRIPS embedded spans
+		title_info.cleaned_title = titlecase(heading.get_text())
+		# replace heading text with titlecased version
+		sup = BeautifulSoup(title_info.title, "html.parser")
+		heading.clear()
+		heading.append(sup)
+		return title_info
+
+	# multi-line heading, so look for structure with spans -- tricky because of embedded spans
+	spans = heading.find_all("span", recursive=False)
 	if spans:
 		for span in spans:
 			epub_type = span.get("epub:type") or ""
@@ -186,6 +234,7 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 			elif "subtitle" in epub_type:
 				title_info.cleaned_subtitle = titlecase(span.get_text())
 				title_info.subtitle = titlecase(extract_contents_as_string(span))
+				# replace subtitle text with titlecased version
 				sup = BeautifulSoup(title_info.subtitle, "html.parser")
 				span.clear()
 				span.append(sup)
@@ -193,26 +242,10 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 				# no epub:type in span so must be simple title
 				title_info.title = titlecase(extract_contents_as_string(span))
 				title_info.cleaned_title = titlecase(span.get_text())
+				# replace subtitle text with titlecased version
 				sup = BeautifulSoup(title_info.title, "html.parser")
 				span.clear()
 				span.append(sup)
-		return title_info
-	else:  # no spans, probably simple title
-		epub_type = heading.get("epub:type") or ""
-		if "z3998:roman" in epub_type:
-			# print(epub_type)
-			title_info.roman = titlecase(heading.get_text())
-			title_info.number = roman.fromRoman(title_info.roman)
-		elif "title" in epub_type:
-			# print(epub_type)
-			title_info.title = titlecase(extract_contents_as_string(heading))
-			title_info.cleaned_title = titlecase(heading.get_text())
-			sup = BeautifulSoup(title_info.title, "html.parser")
-			heading.clear()
-			heading.append(sup)
-		else:
-			# what is in epub:type?
-			print("Query: " + epub_type)
 		return title_info
 
 
@@ -233,7 +266,7 @@ def process_file(filepath: str) -> (str, str):
 		section = heading.find_parent("section")
 		title_info = process_first_heading(heading)
 		title_tag = soup.find("title")
-		new_id = title_info.output_safe_id()
+		new_id = title_info.generate_id()
 		if section:
 			section["id"] = new_id
 		if title_tag:
