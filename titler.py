@@ -36,6 +36,8 @@ class TitleInfo:
 	cleaned_subtitle = ""  # this is for the <title> tag, no embedded tags
 	roman = ""
 	number = 0
+	depth = 1
+	part_prefix = ""
 	division = BookDivision
 
 	def output_title(self) -> str:
@@ -78,13 +80,13 @@ class TitleInfo:
 
 	def generate_id(self):
 		"""
-		:return: a suitably formatted and constructed string for a section id
+		OUTPUTS: a suitably formatted and constructed string for a section id
 		"""
 		prefix = self.generate_prefix()
 		id_string = ""
 
 		if self.roman:  # simplest case, ignore any subtitle
-			id_string = prefix + "-" + str(self.number)
+			id_string = prefix + "-" + self.part_prefix + str(self.number)
 		else:
 			if self.cleaned_title:
 				id_string = self.cleaned_title
@@ -208,7 +210,7 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 		epub_type = heading.get("epub:type") or ""
 		if epub_type:
 			if "z3998:roman" in epub_type:
-				title_info.roman = titlecase(heading.get_text())
+				title_info.roman = heading.get_text()
 				title_info.number = roman.fromRoman(title_info.roman)
 				# if we found a roman numeral in a one-level title, that's it
 				return title_info
@@ -249,6 +251,31 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 		return title_info
 
 
+def get_part_prefix(sections: list) -> str:
+	"""
+	Determine the numeric prefix if we're nested inside a part or volume
+	INPUTS:
+	sections: sequence of outer section tags (BeautifulSoup tags)
+
+	OUTPUTS:
+	string holding prefix of the part, eg '3-2'
+	"""
+	# first section (sections[0]) is the nearest to the content, don't want that.
+	# we want the next outer section
+	epub_type = sections[1].get("epub:type") or ""
+	if not epub_type:
+		return ""
+	if "part" not in epub_type and "division" not in epub_type and "volume" not in epub_type:
+		return ""
+	section_id = sections[1].get("id") or ""
+	if section_id:
+		match = regex.search(r"\w+[-](\d{1,}.*?)", section_id)
+		if match:
+			return match.group(1) + "-"
+	else:
+		return ""
+
+
 def process_file(filepath: str) -> (str, str):
 	"""
 	Run through each file, locating titles and updating <title> tag.
@@ -263,10 +290,14 @@ def process_file(filepath: str) -> (str, str):
 	soup = BeautifulSoup(xhtml, "html.parser")
 	heading = soup.find(["h2", "h3", "h4", "h5", "h6"])  # find first heading, not interested in h1 in halftitle
 	if heading:
-		section = heading.find_parent("section")
 		title_info = process_first_heading(heading)
 		title_tag = soup.find("title")
+		sections = heading.find_parents("section")
+		title_info.depth = len(sections)
+		if title_info.depth > 1 and title_info.number > 0:
+			title_info.part_prefix = get_part_prefix(sections)
 		new_id = title_info.generate_id()
+		section = heading.find_parent("section")
 		if section:
 			section["id"] = new_id
 		if title_tag:
