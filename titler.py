@@ -32,15 +32,15 @@ class TitleInfo:
 	"""
 	title = ""  # this is for the heading title
 	subtitle = ""  # this is for the heading subtitle if any
-	cleaned_title = ""  # this is for the <title> tag, no embedded tags
-	cleaned_subtitle = ""  # this is for the <title> tag, no embedded tags
+	title_no_embeds = ""  # this is for the <title> tag, no embedded tags
+	subtitle_no_embeds = ""  # this is for the <title> tag, no embedded tags
 	roman = ""
 	number = 0
 	depth = 1
 	id_prefix = ""
 	division = BookDivision
 
-	def output_title(self) -> str:
+	def output_title_tag(self) -> str:
 		"""
 		:return: a suitably formatted and constructed string for a title tag
 		"""
@@ -48,20 +48,20 @@ class TitleInfo:
 
 		if self.subtitle:
 			if prefix != "":
-				return prefix + " " + str(self.number) + ": " + self.cleaned_subtitle
+				return prefix + " " + str(self.number) + ": " + self.subtitle_no_embeds
 			else:
-				if self.cleaned_title == "":
-					return self.cleaned_subtitle
+				if self.title_no_embeds == "":
+					return self.subtitle_no_embeds
 				else:
-					return self.cleaned_title + ": " + self.cleaned_subtitle
+					return self.title_no_embeds + ": " + self.subtitle_no_embeds
 		else:
 			if prefix != "":
 				if self.number > 0:
 					return prefix + " " + str(self.number)
 				else:
-					return self.cleaned_title
+					return self.title_no_embeds
 			else:
-				return self.cleaned_title
+				return self.title_no_embeds
 
 	def generate_prefix(self):
 		if self.division == BookDivision.ARTICLE:
@@ -88,14 +88,14 @@ class TitleInfo:
 		if self.roman:  # simplest case, ignore any subtitle
 			id_string = prefix + "-" + self.id_prefix + "-" + str(self.number)
 		else:
-			if self.cleaned_title:
+			if self.title_no_embeds:
 				if self.id_prefix:
-					id_string = self.id_prefix + "-" + self.cleaned_title
+					id_string = self.id_prefix + "-" + self.title_no_embeds
 				else:
-					id_string = self.cleaned_title
+					id_string = self.title_no_embeds
 			else:  # unlikely case: subtitle but no title ??
-				if self.cleaned_subtitle:
-					id_string = self.cleaned_subtitle
+				if self.subtitle_no_embeds:
+					id_string = self.subtitle_no_embeds
 		return make_url_safe(id_string)
 
 
@@ -205,8 +205,21 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 	"""
 	title_info = TitleInfo()
 	title_info.division = get_book_division(heading)
+	temp_title = extract_contents_as_string(heading)  # this includes any embedded tags
 
-	# first, check to see if we have a single-line title
+	# the trickiest case to handle is a heading like <h2 epub:type="title">Book <span epub:type="z3998:roman">IV</span></h2>
+	# so we have to separately filter for such cases FIRST
+	match = regex.search(r'(Book|Part|Division|Volume) <span epub:type="z3998:roman">(.*?)</span>', temp_title, regex.IGNORECASE)
+	if match:
+		title_info.title_no_embeds = match.group(1) + " " + str(roman.fromRoman(match.group(2)))  # eg "Book 3"
+		title_info.title = titlecase(temp_title)  # this leaves roman numerals alone, eg "Book IV"
+		# there are no subtitles
+		title_info.section_id = make_url_safe(title_info.title_no_embeds)
+		# no more to do
+		return title_info
+
+	# now we have to deal with other 'single-line' headings,
+	# eg <h2 epub:type="title epub:type="z3998:roman">IV</h2> or <h3 epub:type="title">Prelude</h3>
 	line_count = str(heading).count("\n") + 1
 	if line_count == 1:
 		epub_type = heading.get("epub:type") or ""
@@ -214,21 +227,16 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 			if "z3998:roman" in epub_type:
 				title_info.roman = heading.get_text()
 				title_info.number = roman.fromRoman(title_info.roman)
-				# if we found a roman numeral in a one-level title, that's it
+				# no subtitles
+				title_info.section_id = title_info.generate_id()
+				# no need to do titlecasing
 				return title_info
-		# title isn't roman, so just get text ignoring any embedded spans
-		# this INCLUDES embedded spans as strings
-		title_info.title = titlecase(extract_contents_as_string(heading))
-		# this STRIPS embedded spans
-		title_info.cleaned_title = titlecase(heading.get_text())
-		# replace heading text with titlecased version
-		sup = BeautifulSoup(title_info.title, "html.parser")
-		heading.clear()
-		heading.append(sup)
-		return title_info
+			else:
+				title_info.title = titlecase(extract_contents_as_string(heading))
+				title_info.title_no_embeds = titlecase(heading.get_text())
+				return title_info
 
-	# multi-line heading, so look for structure with spans -- tricky because of embedded spans
-	spans = heading.find_all("span", recursive=False)
+	spans = heading.find_all("span", recursive=False)  # only want spans which are immediate descendants
 	if spans:
 		for span in spans:
 			epub_type = span.get("epub:type") or ""
@@ -236,21 +244,23 @@ def process_first_heading(heading: BeautifulSoup) -> TitleInfo:
 				title_info.roman = span.get_text()
 				title_info.number = roman.fromRoman(title_info.roman)
 			elif "subtitle" in epub_type:
-				title_info.cleaned_subtitle = titlecase(span.get_text())
+				title_info.subtitle_no_embeds = titlecase(span.get_text())
 				title_info.subtitle = titlecase(extract_contents_as_string(span))
 				# replace subtitle text with titlecased version
-				sup = BeautifulSoup(title_info.subtitle, "html.parser")
-				span.clear()
-				span.append(sup)
+				update_span(span, title_info.subtitle)
 			else:
 				# no epub:type in span so must be simple title
 				title_info.title = titlecase(extract_contents_as_string(span))
-				title_info.cleaned_title = titlecase(span.get_text())
-				# replace subtitle text with titlecased version
-				sup = BeautifulSoup(title_info.title, "html.parser")
-				span.clear()
-				span.append(sup)
+				title_info.title_no_embeds = titlecase(span.get_text())
+				# replace title text in span with titlecased version
+				update_span(span, title_info.title)
 		return title_info
+
+
+def update_span(span, textstr):
+	sup = BeautifulSoup(textstr, "html.parser")
+	span.clear()
+	span.append(sup)
 
 
 def get_part_prefix(title_info: TitleInfo, sections: list):
@@ -314,7 +324,7 @@ def process_file(filepath: str) -> (str, str):
 			section["id"] = new_id
 		if title_tag:
 			title_tag.clear()
-			title_tag.append(title_info.output_title())
+			title_tag.append(title_info.output_title_tag())
 		return format_xhtml(str(soup)), new_id
 	# failure, so return blanks
 	return "", ""
@@ -329,6 +339,8 @@ def get_book_division(tag: BeautifulSoup) -> BookDivision:
 	parent_section = tag.find_parents(["section", "article"])
 	if not parent_section:
 		parent_section = tag.find_parents("body")
+	if not parent_section:
+		return BookDivision.NONE
 	section_epub_type = parent_section[0].get("epub:type") or ""
 	if "part" in section_epub_type:
 		return BookDivision.PART
